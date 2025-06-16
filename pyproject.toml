@@ -1,0 +1,24 @@
+[project]
+name = "wikiextractor"
+version = "3.0.7"
+description = "wikiextractor"
+readme = "README.md"
+requires-python = ">=3.13"
+dependencies = [
+    "py7zr>=1.0.0",
+]
+
+[project.scripts]
+wikiextractor = "wikiextractor.WikiExtractor:main"
+wikiextractor-history = "wikiextractor.WikiHistoryExtractor:main"
+extractPage = "wikiextractor.extractPage:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "mypy>=1.16.0",
+    "pytest>=8.4.0",
+]
