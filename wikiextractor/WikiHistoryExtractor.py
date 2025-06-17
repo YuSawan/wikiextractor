@@ -445,6 +445,8 @@ def main() -> None:
                         help="compress output files using bzip")
     groupO.add_argument("--json", action="store_true",
                         help="write output in json format instead of the default <doc> format")
+    groupO.add_argument("-t", "--timecut", default="2024-01-01T00:00:00Z",
+                        help="cut articles at this time (default %(default)s); ")
 
     groupP = parser.add_argument_group('Processing')
     groupP.add_argument("--html", action="store_true",
