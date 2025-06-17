@@ -24,16 +24,19 @@ import logging
 import re
 import time
 from html.entities import name2codepoint
+from typing import Any, TextIO
 from urllib.parse import quote as urlencode
 
 from .extract import (
     Extractor,
+    Infix,
     MagicWords,
     Template,
     dropNested,
     dropSpans,
     findBalanced,
     magicWordsRE,
+    parserFunctions,
     splitParts,
     syntaxhighlight,
     tailRE,
@@ -66,234 +69,9 @@ discardElements = [
 acceptedNamespaces = ['w', 'wiktionary', 'wikt']
 
 
-def get_url(urlbase, uid):
+def get_url(urlbase: str, uid: str) -> str:
     return "%s?curid=%s" % (urlbase, uid)
 
-
-# ======================================================================
-
-
-def clean(extractor, text, expand_templates=False, html_safe=True):
-    """
-    Transforms wiki markup. If the command line flag --escapedoc is set then the text is also escaped
-    @see https://www.mediawiki.org/wiki/Help:Formatting
-    :param extractor: the Extractor t use.
-    :param text: the text to clean.
-    :param expand_templates: whether to perform template expansion.
-    :param html_safe: whether to convert reserved HTML characters to entities.
-    @return: the cleaned text.
-    """
-
-    if expand_templates:
-        # expand templates
-        # See: http://www.mediawiki.org/wiki/Help:Templates
-        text = extractor.expandTemplates(text)
-    else:
-        # Drop transclusions (template, parser functions)
-        text = dropNested(text, r'{{', r'}}')
-
-    # Drop tables
-    text = dropNested(text, r'{\|', r'\|}')
-
-    # replace external links
-    text = replaceExternalLinks(text)
-
-    # replace internal links
-    text = replaceInternalLinks(text)
-
-    # drop MagicWords behavioral switches
-    text = magicWordsRE.sub('', text)
-
-    # ############### Process HTML ###############
-
-    # turn into HTML, except for the content of <syntaxhighlight>
-    res = ''
-    cur = 0
-    for m in syntaxhighlight.finditer(text):
-        end = m.end()
-        res += unescape(text[cur:m.start()]) + m.group(1)
-        cur = end
-    text = res + unescape(text[cur:])
-
-    # Handle bold/italic/quote
-    if extractor.HtmlFormatting:
-        text = bold_italic.sub(r'<b>\1</b>', text)
-        text = bold.sub(r'<b>\1</b>', text)
-        text = italic.sub(r'<i>\1</i>', text)
-    else:
-        text = bold_italic.sub(r'\1', text)
-        text = bold.sub(r'\1', text)
-        text = italic_quote.sub(r'"\1"', text)
-        text = italic.sub(r'"\1"', text)
-        text = quote_quote.sub(r'"\1"', text)
-    # residuals of unbalanced quotes
-    text = text.replace("'''", '').replace("''", '"')
-
-    # Collect spans
-
-    spans = []
-    # Drop HTML comments
-    for m in comment.finditer(text):
-        spans.append((m.start(), m.end()))
-
-    # Drop self-closing tags
-    for pattern in selfClosing_tag_patterns:
-        for m in pattern.finditer(text):
-            spans.append((m.start(), m.end()))
-
-    # Drop ignored tags
-    for left, right in ignored_tag_patterns:
-        for m in left.finditer(text):
-            spans.append((m.start(), m.end()))
-        for m in right.finditer(text):
-            spans.append((m.start(), m.end()))
-
-    # Bulk remove all spans
-    text = dropSpans(spans, text)
-
-    # Drop discarded elements
-    for tag in discardElements:
-        text = dropNested(text, r'<\s*%s\b[^>/]*>' % tag, r'<\s*/\s*%s>' % tag)
-
-    if not extractor.HtmlFormatting:
-        # Turn into text what is left (&amp;nbsp;) and <syntaxhighlight>
-        text = unescape(text)
-
-    # Expand placeholders
-    for pattern, placeholder in placeholder_tag_patterns:
-        index = 1
-        for match in pattern.finditer(text):
-            text = text.replace(match.group(), '%s_%d' % (placeholder, index))
-            index += 1
-
-    text = text.replace('<<', u'«').replace('>>', u'»')
-
-    #############################################
-
-    # Cleanup text
-    text = text.replace('\t', ' ')
-    text = spaces.sub(' ', text)
-    text = dots.sub('...', text)
-    text = re.sub(u' (,:\.\)\]»)', r'\1', text)
-    text = re.sub(u'(\[\(«) ', r'\1', text)
-    text = re.sub(r'\n\W+?\n', '\n', text, flags=re.U)  # lines with only punctuations
-    text = text.replace(',,', ',').replace(',.', '.')
-    if html_safe:
-        text = html.escape(text, quote=False)
-
-    return text
-
-
-# skip level 1, it is page name level
-section = re.compile(r'(==+)\s*(.*?)\s*\1')
-
-listOpen = {'*': '<ul>', '#': '<ol>', ';': '<dl>', ':': '<dl>'}
-listClose = {'*': '</ul>', '#': '</ol>', ';': '</dl>', ':': '</dl>'}
-listItem = {'*': '<li>%s</li>', '#': '<li>%s</<li>', ';': '<dt>%s</dt>',
-            ':': '<dd>%s</dd>'}
-
-
-def compact(text, mark_headers=False):
-    """Deal with headers, lists, empty sections, residuals of tables.
-    :param text: convert to HTML
-    """
-
-    page = []  # list of paragraph
-    headers = {}  # Headers for unfilled sections
-    emptySection = False  # empty sections are discarded
-    listLevel = ''  # nesting of lists
-
-    for line in text.split('\n'):
-
-        if not line:
-            if len(listLevel):    # implies HistoryExtractor.HtmlFormatting
-                for c in reversed(listLevel):
-                    page.append(listClose[c])
-                    listLevel = ''
-            continue
-
-        # Handle section titles
-        m = section.match(line)
-        if m:
-            title = m.group(2)
-            lev = len(m.group(1))
-            if HistoryExtractor.HtmlFormatting:
-                page.append("<h%d>%s</h%d>" % (lev, title, lev))
-            if title and title[-1] not in '!?':
-                title += '.'
-
-            if mark_headers:
-                title = "## " + title
-
-            headers[lev] = title
-            # drop previous headers
-            headers = { k:v for k,v in headers.items() if k <= lev }
-            emptySection = True
-            continue
-        # Handle page title
-        if line.startswith('++'):
-            title = line[2:-2]
-            if title:
-                if title[-1] not in '!?':
-                    title += '.'
-                page.append(title)
-        # handle indents
-        elif line[0] == ':':
-            page.append(line.lstrip(':'))
-        # handle lists
-        # @see https://www.mediawiki.org/wiki/Help:Formatting
-        elif line[0] in '*#;':
-            if HistoryExtractor.HtmlFormatting:
-                # close extra levels
-                l = 0
-                for c in listLevel:
-                    if l < len(line) and c != line[l]:
-                        for extra in reversed(listLevel[l:]):
-                            page.append(listClose[extra])
-                        listLevel = listLevel[:l]
-                        break
-                    l += 1
-                if l < len(line) and line[l] in '*#;:':
-                    # add new level (only one, no jumps)
-                    # FIXME: handle jumping levels
-                    type = line[l]
-                    page.append(listOpen[type])
-                    listLevel += type
-                    line = line[l+1:].strip()
-                else:
-                    # continue on same level
-                    type = line[l-1]
-                    line = line[l:].strip()
-                page.append(listItem[type] % line)
-            else:
-                continue
-        elif len(listLevel):    # implies Extractor.HtmlFormatting
-            for c in reversed(listLevel):
-                page.append(listClose[c])
-            listLevel = []
-
-        # Drop residuals of lists
-        elif line[0] in '{|' or line[-1] == '}':
-            continue
-        # Drop irrelevant lines
-        elif (line[0] == '(' and line[-1] == ')') or line.strip('.-') == '':
-            continue
-        elif len(headers):
-            if HistoryExtractor.keepSections:
-                items = sorted(headers.items())
-                for (i, v) in items:
-                    page.append(v)
-            headers.clear()
-            page.append(line)  # first line
-            emptySection = False
-        elif not emptySection:
-            page.append(line)
-            # dangerous
-            # # Drop preformatted
-            # elif line[0] == ' ':
-            #     continue
-
-    return page
 
 # ----------------------------------------------------------------------
 # External links
@@ -323,7 +101,7 @@ EXT_IMAGE_REGEX = re.compile(
     re.X | re.S | re.U)
 
 
-def replaceExternalLinks(text):
+def replaceExternalLinks(text: str) -> str:
     s = ''
     cur = 0
     for m in ExtLinkBracketedRegex.finditer(text):
@@ -356,7 +134,7 @@ def replaceExternalLinks(text):
     return s + text[cur:]
 
 
-def makeExternalLink(url, anchor):
+def makeExternalLink(url: str, anchor: str) -> str:
     """Function applied to wikiLinks"""
     if HistoryExtractor.keepLinks:
         return '<a href="%s">%s</a>' % (urlencode(url), anchor)
@@ -364,7 +142,7 @@ def makeExternalLink(url, anchor):
         return anchor
 
 
-def makeExternalImage(url, alt=''):
+def makeExternalImage(url: str, alt: str = '') -> str:
     if HistoryExtractor.keepLinks:
         return '<img src="%s" alt="%s">' % (url, alt)
     else:
@@ -379,7 +157,7 @@ def makeExternalImage(url, alt=''):
 # Also: [[Help:IPA for Catalan|[andora]]]
 
 
-def replaceInternalLinks(text):
+def replaceInternalLinks(text: str) -> str:
     """
     Replaces external links of the form:
     [[title |...|label]]trail
@@ -419,7 +197,7 @@ def replaceInternalLinks(text):
     return res + text[cur:]
 
 
-def makeInternalLink(title, label):
+def makeInternalLink(title: str, label: str) -> str:
     colon = title.find(':')
     if colon > 0 and title[:colon] not in acceptedNamespaces:
         return ''
@@ -450,7 +228,7 @@ ignoredTags = (
 placeholder_tags = {'math': 'formula', 'code': 'codice'}
 
 
-def normalizeTitle(title):
+def normalizeTitle(title: str) -> str:
     """Normalize title"""
     # remove leading/trailing whitespace and underscores
     title = title.strip(' _')
@@ -488,7 +266,7 @@ def normalizeTitle(title):
     return title
 
 
-def unescape(text):
+def unescape(text: str) -> str:
     """
     Removes HTML or XML character references and entities from a text string.
 
@@ -496,7 +274,7 @@ def unescape(text):
     :return The plain text, as a Unicode string, if necessary.
     """
 
-    def fixup(m):
+    def fixup(m: re.Match) -> str:
         text = m.group(0)
         code = m.group(1)
         try:
@@ -507,7 +285,7 @@ def unescape(text):
                     return chr(int(code))
             else:  # named entity
                 return chr(name2codepoint[code])
-        except:
+        except KeyError:
             return text  # leave as is
 
     return re.sub("&#?(\w+);", fixup, text)
@@ -521,13 +299,13 @@ comment = re.compile(r'<!--.*?-->', re.DOTALL)
 ignored_tag_patterns = []
 
 
-def ignoreTag(tag):
+def ignoreTag(tag: str) -> None:
     left = re.compile(r'<%s\b.*?>' % tag, re.IGNORECASE | re.DOTALL)  # both <ref> and <reference>
     right = re.compile(r'</\s*%s>' % tag, re.IGNORECASE)
     ignored_tag_patterns.append((left, right))
 
 
-def resetIgnoredTags():
+def resetIgnoredTags() -> None:
     global ignored_tag_patterns
     ignored_tag_patterns = []
 
@@ -543,7 +321,7 @@ selfClosing_tag_patterns = [
 # Match HTML placeholder tags
 placeholder_tag_patterns = [
     (re.compile(r'<\s*%s(\s*| [^>]+?)>.*?<\s*/\s*%s\s*>' % (tag, tag), re.DOTALL | re.IGNORECASE),
-     repl) for tag, repl in placeholder_tags.items()
+    repl) for tag, repl in placeholder_tags.items()
 ]
 
 # Match preformatted lines
@@ -571,7 +349,7 @@ dots = re.compile(r'\.{4,}')
 substWords = 'subst:|safesubst:'
 
 class HistoryExtractor(Extractor):
-    def __init__(self, id, revid, timestamp, urlbase, title, page):
+    def __init__(self, id: str, revid: str, timestamp: str, urlbase: str, title: str, page: list[Any]) -> None:
         """
         :param page: a list of lines.
         """
@@ -588,11 +366,11 @@ class HistoryExtractor(Extractor):
         self.recursion_exceeded_3_errs = 0  # parameter recursion
         self.template_title_errs = 0
 
-    def clean_text(self, text, mark_headers=False, expand_templates=True,
-                   html_safe=True):
+    def clean_text(self, text: str, mark_headers: bool = False, expand_templates: bool = True,
+                    html_safe: bool = True) -> list[str]:
         """
         :param mark_headers: True to distinguish headers from paragraphs
-          e.g. "## Section 1"
+            e.g. "## Section 1"
         """
         self.magicWords['namespace'] = self.title[:max(0, self.title.find(":"))]
         #self.magicWords['namespacenumber'] = '0' # for article, 
@@ -606,18 +384,18 @@ class HistoryExtractor(Extractor):
 
         text = clean(self, text, expand_templates=expand_templates,
                     html_safe=html_safe)
-        text = compact(text, mark_headers=mark_headers)
+        compact_text = compact(text, mark_headers=mark_headers)
 
-        return text
+        return compact_text
 
-    def extract(self, out, html_safe=True):
+    def extract(self, out: TextIO, html_safe: bool = True) -> None:
         """
         :param out: a memory file.
         :param html_safe: whether to escape HTML entities.
         """
         logging.debug("%s\t%s", self.id, self.title)
-        text = ''.join(self.page)
-        text = self.clean_text(text, html_safe=html_safe)
+        raw_text = ''.join(self.page)
+        text = self.clean_text(raw_text, html_safe=html_safe)
 
         if self.to_json:
             json_data = {
@@ -649,7 +427,7 @@ class HistoryExtractor(Extractor):
             logging.warn("Template errors in article '%s' (%s): title(%d) recursion(%d, %d, %d)",
                          self.title, self.id, *errs)
 
-    def expandTemplate(self, body):
+    def expandTemplate(self, body: str) -> str:
         """Expands template invocation.
         :param body: the parts of a template.
 
@@ -804,11 +582,236 @@ class HistoryExtractor(Extractor):
         # logging.debug('   INVOCATION> %s %d %s', title, len(self.frame), value)
         return value
 
+
+# ======================================================================
+
+def clean(extractor: HistoryExtractor, text: str, expand_templates: bool = False, html_safe: bool = True) -> str:
+    """
+    Transforms wiki markup. If the command line flag --escapedoc is set then the text is also escaped
+    @see https://www.mediawiki.org/wiki/Help:Formatting
+    :param extractor: the Extractor t use.
+    :param text: the text to clean.
+    :param expand_templates: whether to perform template expansion.
+    :param html_safe: whether to convert reserved HTML characters to entities.
+    @return: the cleaned text.
+    """
+
+    if expand_templates:
+        # expand templates
+        # See: http://www.mediawiki.org/wiki/Help:Templates
+        text = extractor.expandTemplates(text)
+    else:
+        # Drop transclusions (template, parser functions)
+        text = dropNested(text, r'{{', r'}}')
+
+    # Drop tables
+    text = dropNested(text, r'{\|', r'\|}')
+
+    # replace external links
+    text = replaceExternalLinks(text)
+
+    # replace internal links
+    text = replaceInternalLinks(text)
+
+    # drop MagicWords behavioral switches
+    text = magicWordsRE.sub('', text)
+
+    # ############### Process HTML ###############
+
+    # turn into HTML, except for the content of <syntaxhighlight>
+    res = ''
+    cur = 0
+    for m in syntaxhighlight.finditer(text):
+        end = m.end()
+        res += unescape(text[cur:m.start()]) + m.group(1)
+        cur = end
+    text = res + unescape(text[cur:])
+
+    # Handle bold/italic/quote
+    if extractor.HtmlFormatting:
+        text = bold_italic.sub(r'<b>\1</b>', text)
+        text = bold.sub(r'<b>\1</b>', text)
+        text = italic.sub(r'<i>\1</i>', text)
+    else:
+        text = bold_italic.sub(r'\1', text)
+        text = bold.sub(r'\1', text)
+        text = italic_quote.sub(r'"\1"', text)
+        text = italic.sub(r'"\1"', text)
+        text = quote_quote.sub(r'"\1"', text)
+    # residuals of unbalanced quotes
+    text = text.replace("'''", '').replace("''", '"')
+
+    # Collect spans
+
+    spans = []
+    # Drop HTML comments
+    for m in comment.finditer(text):
+        spans.append((m.start(), m.end()))
+
+    # Drop self-closing tags
+    for pattern in selfClosing_tag_patterns:
+        for m in pattern.finditer(text):
+            spans.append((m.start(), m.end()))
+
+    # Drop ignored tags
+    for left, right in ignored_tag_patterns:
+        for m in left.finditer(text):
+            spans.append((m.start(), m.end()))
+        for m in right.finditer(text):
+            spans.append((m.start(), m.end()))
+
+    # Bulk remove all spans
+    text = dropSpans(spans, text)
+
+    # Drop discarded elements
+    for tag in discardElements:
+        text = dropNested(text, r'<\s*%s\b[^>/]*>' % tag, r'<\s*/\s*%s>' % tag)
+
+    if not extractor.HtmlFormatting:
+        # Turn into text what is left (&amp;nbsp;) and <syntaxhighlight>
+        text = unescape(text)
+
+    # Expand placeholders
+    for pattern, placeholder in placeholder_tag_patterns:
+        index = 1
+        for match in pattern.finditer(text):
+            text = text.replace(match.group(), '%s_%d' % (placeholder, index))
+            index += 1
+
+    text = text.replace('<<', u'«').replace('>>', u'»')
+
+    #############################################
+
+    # Cleanup text
+    text = text.replace('\t', ' ')
+    text = spaces.sub(' ', text)
+    text = dots.sub('...', text)
+    text = re.sub(u' (,:\.\)\]»)', r'\1', text)
+    text = re.sub(u'(\[\(«) ', r'\1', text)
+    text = re.sub(r'\n\W+?\n', '\n', text, flags=re.U)  # lines with only punctuations
+    text = text.replace(',,', ',').replace(',.', '.')
+    if html_safe:
+        text = html.escape(text, quote=False)
+
+    return text
+
+
+# skip level 1, it is page name level
+section = re.compile(r'(==+)\s*(.*?)\s*\1')
+
+listOpen = {'*': '<ul>', '#': '<ol>', ';': '<dl>', ':': '<dl>'}
+listClose = {'*': '</ul>', '#': '</ol>', ';': '</dl>', ':': '</dl>'}
+listItem = {'*': '<li>%s</li>', '#': '<li>%s</<li>', ';': '<dt>%s</dt>',
+            ':': '<dd>%s</dd>'}
+
+
+def compact(text: str, mark_headers: bool = False) -> list[str]:
+    """Deal with headers, lists, empty sections, residuals of tables.
+    :param text: convert to HTML
+    """
+
+    page = []  # list of paragraph
+    headers = {}  # Headers for unfilled sections
+    emptySection = False  # empty sections are discarded
+    listLevel = ''  # nesting of lists
+
+    for line in text.split('\n'):
+
+        if not line:
+            if len(listLevel):    # implies HistoryExtractor.HtmlFormatting
+                for c in reversed(listLevel):
+                    page.append(listClose[c])
+                    listLevel = ''
+            continue
+
+        # Handle section titles
+        m = section.match(line)
+        if m:
+            title = m.group(2)
+            lev = len(m.group(1))
+            if HistoryExtractor.HtmlFormatting:
+                page.append("<h%d>%s</h%d>" % (lev, title, lev))
+            if title and title[-1] not in '!?':
+                title += '.'
+
+            if mark_headers:
+                title = "## " + title
+
+            headers[lev] = title
+            # drop previous headers
+            headers = { k:v for k,v in headers.items() if k <= lev }
+            emptySection = True
+            continue
+        # Handle page title
+        if line.startswith('++'):
+            title = line[2:-2]
+            if title:
+                if title[-1] not in '!?':
+                    title += '.'
+                page.append(title)
+        # handle indents
+        elif line[0] == ':':
+            page.append(line.lstrip(':'))
+        # handle lists
+        # @see https://www.mediawiki.org/wiki/Help:Formatting
+        elif line[0] in '*#;':
+            if HistoryExtractor.HtmlFormatting:
+                # close extra levels
+                l = 0
+                for c in listLevel:
+                    if l < len(line) and c != line[l]:
+                        for extra in reversed(listLevel[l:]):
+                            page.append(listClose[extra])
+                        listLevel = listLevel[:l]
+                        break
+                    l += 1
+                if l < len(line) and line[l] in '*#;:':
+                    # add new level (only one, no jumps)
+                    # FIXME: handle jumping levels
+                    type = line[l]
+                    page.append(listOpen[type])
+                    listLevel += type
+                    line = line[l+1:].strip()
+                else:
+                    # continue on same level
+                    type = line[l-1]
+                    line = line[l:].strip()
+                page.append(listItem[type] % line)
+            else:
+                continue
+        elif len(listLevel):    # implies Extractor.HtmlFormatting
+            for c in reversed(listLevel):
+                page.append(listClose[c])
+            listLevel = []
+
+        # Drop residuals of lists
+        elif line[0] in '{|' or line[-1] == '}':
+            continue
+        # Drop irrelevant lines
+        elif (line[0] == '(' and line[-1] == ')') or line.strip('.-') == '':
+            continue
+        elif len(headers):
+            if HistoryExtractor.keepSections:
+                items = sorted(headers.items())
+                for (i, v) in items:
+                    page.append(v)
+            headers.clear()
+            page.append(line)  # first line
+            emptySection = False
+        elif not emptySection:
+            page.append(line)
+            # dangerous
+            # # Drop preformatted
+            # elif line[0] == ' ':
+            #     continue
+
+    return page
+
 # ----------------------------------------------------------------------
 # parser functions utilities
 
 
-def ucfirst(string):
+def ucfirst(string: str) -> str:
     """:return: a string with just its first character uppercase
     We can't use title() since it coverts all words.
     """
@@ -821,7 +824,7 @@ def ucfirst(string):
         return ''
 
 
-def lcfirst(string):
+def lcfirst(string: str) -> str:
     """:return: a string with its first character lowercase"""
     if string:
         if len(string) > 1:
@@ -832,7 +835,7 @@ def lcfirst(string):
         return ''
 
 
-def fullyQualifiedTemplateTitle(templateTitle):
+def fullyQualifiedTemplateTitle(templateTitle: str) -> str:
     """
     Determine the namespace of the page being included through the template
     mechanism
@@ -865,7 +868,7 @@ def fullyQualifiedTemplateTitle(templateTitle):
         return ''  # caller may log as error
 
 
-def normalizeNamespace(ns):
+def normalizeNamespace(ns: str) -> str:
     return ucfirst(ns)
 
 
@@ -875,133 +878,11 @@ def normalizeNamespace(ns):
 # https://github.com/Wikia/app/blob/dev/extensions/ParserFunctions/ParserFunctions_body.php
 
 
-class Infix():
-
-    """Infix operators.
-    The calling sequence for the infix is:
-      x |op| y
-    """
-
-    def __init__(self, function):
-        self.function = function
-
-    def __ror__(self, other):
-        return Infix(lambda x, self=self, other=other: self.function(other, x))
-
-    def __or__(self, other):
-        return self.function(other)
-
-    def __rlshift__(self, other):
-        return Infix(lambda x, self=self, other=other: self.function(other, x))
-
-    def __rshift__(self, other):
-        return self.function(other)
-
-    def __call__(self, value1, value2):
-        return self.function(value1, value2)
-
-
 ROUND = Infix(lambda x, y: round(x, y))
 
 
-def sharp_expr(expr):
-    try:
-        expr = re.sub('=', '==', expr)
-        expr = re.sub('mod', '%', expr)
-        expr = re.sub('\bdiv\b', '/', expr)
-        expr = re.sub('\bround\b', '|ROUND|', expr)
-        return str(eval(expr))
-    except:
-        return '<span class="error"></span>'
-
-
-def sharp_if(testValue, valueIfTrue, valueIfFalse=None, *args):
-    # In theory, we should evaluate the first argument here,
-    # but it was evaluated while evaluating part[0] in expandTemplate().
-    if testValue.strip():
-        # The {{#if:}} function is an if-then-else construct.
-        # The applied condition is: "The condition string is non-empty".
-        valueIfTrue = valueIfTrue.strip()
-        if valueIfTrue:
-            return valueIfTrue
-    elif valueIfFalse:
-        return valueIfFalse.strip()
-    return ""
-
-
-def sharp_ifeq(lvalue, rvalue, valueIfTrue, valueIfFalse=None, *args):
-    rvalue = rvalue.strip()
-    if rvalue:
-        # lvalue is always defined
-        if lvalue.strip() == rvalue:
-            # The {{#ifeq:}} function is an if-then-else construct. The
-            # applied condition is "is rvalue equal to lvalue". Note that this
-            # does only string comparison while MediaWiki implementation also
-            # supports numerical comparissons.
-
-            if valueIfTrue:
-                return valueIfTrue.strip()
-        else:
-            if valueIfFalse:
-                return valueIfFalse.strip()
-    return ""
-
-
-def sharp_iferror(test, then='', Else=None, *args):
-    if re.match('<(?:strong|span|p|div)\s(?:[^\s>]*\s+)*?class="(?:[^"\s>]*\s+)*?error(?:\s[^">]*)?"', test):
-        return then
-    elif Else is None:
-        return test.strip()
-    else:
-        return Else.strip()
-
-
-def sharp_switch(primary, *params):
-    # FIXME: we don't support numeric expressions in primary
-
-    # {{#switch: comparison string
-    #  | case1 = result1
-    #  | case2
-    #  | case4 = result2
-    #  | 1 | case5 = result3
-    #  | #default = result4
-    # }}
-
-    primary = primary.strip()
-    found = False  # for fall through cases
-    default = None
-    rvalue = None
-    lvalue = ''
-    for param in params:
-        # handle cases like:
-        #  #default = [http://www.perseus.tufts.edu/hopper/text?doc=Perseus...]
-        pair = param.split('=', 1)
-        lvalue = pair[0].strip()
-        rvalue = None
-        if len(pair) > 1:
-            # got "="
-            rvalue = pair[1].strip()
-            # check for any of multiple values pipe separated
-            if found or primary in [v.strip() for v in lvalue.split('|')]:
-                # Found a match, return now
-                return rvalue
-            elif lvalue == '#default':
-                default = rvalue
-            rvalue = None  # avoid defaulting to last case
-        elif lvalue == primary:
-            # If the value matches, set a flag and continue
-            found = True
-    # Default case
-    # Check if the last item had no = sign, thus specifying the default case
-    if rvalue is not None:
-        return lvalue
-    elif default is not None:
-        return default
-    return ''
-
-
 # Extension Scribuntu
-def sharp_invoke(module, function, frame):
+def sharp_invoke(module, function, frame: list[Any]) -> str:
     functions = modules.get(module)
     if functions:
         funct = functions.get(function)
@@ -1022,52 +903,7 @@ def sharp_invoke(module, function, frame):
     return ''
 
 
-parserFunctions = {
-
-    '#expr': sharp_expr,
-
-    '#if': sharp_if,
-
-    '#ifeq': sharp_ifeq,
-
-    '#iferror': sharp_iferror,
-
-    '#ifexpr': lambda *args: '',  # not supported
-
-    '#ifexist': lambda *args: '',  # not supported
-
-    '#rel2abs': lambda *args: '',  # not supported
-
-    '#switch': sharp_switch,
-
-    '# language': lambda *args: '',  # not supported
-
-    '#time': lambda *args: '',  # not supported
-
-    '#timel': lambda *args: '',  # not supported
-
-    '#titleparts': lambda *args: '',  # not supported
-
-    # This function is used in some pages to construct links
-    # http://meta.wikimedia.org/wiki/Help:URL
-    'urlencode': lambda string, *rest: urlencode(string),
-
-    'lc': lambda string, *rest: string.lower() if string else '',
-
-    'lcfirst': lambda string, *rest: lcfirst(string),
-
-    'uc': lambda string, *rest: string.upper() if string else '',
-
-    'ucfirst': lambda string, *rest: ucfirst(string),
-
-    'int': lambda string, *rest: str(int(string)),
-
-    'padleft': lambda char, width, string: string.ljust(char, int(pad)), # CHECK_ME
-
-}
-
-
-def callParserFunction(functionName, args, frame):
+def callParserFunction(functionName: str, args: list[Any], frame: list[Any]) -> str:
     """
     Parser functions have similar syntax as templates, except that
     the first argument is everything after the first colon.
@@ -1101,14 +937,14 @@ reNoinclude = re.compile(r'<noinclude>(?:.*?)</noinclude>', re.DOTALL)
 reIncludeonly = re.compile(r'<includeonly>|</includeonly>', re.DOTALL)
 
 # These are built before spawning processes, hence they are shared.
-templates = {}
-redirects = {}
+templates: dict[str, str] = {}
+redirects: dict[str, str] = {}
 # cache of parser templates
 # FIXME: sharing this with a Manager slows down.
-templateCache = {}
+templateCache: dict[str, str] = {}
 
 
-def define_template(title, page):
+def define_template(title: str, page: list[str]) -> None:
     """
     Adds a template defined in the :param page:.
     @see https://en.wikipedia.org/wiki/Help:Template#Noinclude.2C_includeonly.2C_and_onlyinclude
