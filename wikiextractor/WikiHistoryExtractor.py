@@ -243,7 +243,7 @@ def collect_pages(text: TextIO) -> Iterator[tuple[str, str, str, str, list[Any]]
             redirect = False
 
 
-def process_dump(input_file: str, template_file: str, out_file: str, file_size: int, file_compress: bool,
+def process_dump(input_file: str, template_file: str, out_file: str, file_size: int, file_compress: bool, time_cut: str,
                 process_count: int, html_safe: bool, expand_templates: bool = True) -> None:
     """
     :param input_file: name of the wikipedia dump file; '-' to read from stdin
@@ -356,28 +356,25 @@ def process_dump(input_file: str, template_file: str, out_file: str, file_size: 
     prev_timestamp = ''
     prev_title = ''
     prev_page = None
-    time_cut_data: dict[str, tuple] = {}
+    job = None
+    timecut_date = convert_timestamp_to_date(time_cut)
     for id, revid, timestamp, title, page in collect_pages(input):
         if prev_id != id: # new page id
             if prev_id:
-                for t, job in time_cut_data.items():
-                    print(job[0], job[2], t)
-                    jobs_queue.put(job)
-                print(prev_id, prev_timestamp, 'latest')
-                job = (prev_id, prev_revid, prev_timestamp, urlbase, prev_title, prev_page, ordinal) # latest version
-                jobs_queue.put(job)  # goes to any available extract_process
-                ordinal += 1
-                time_cut_data.clear()  # reset time cut data
+                if convert_timestamp_to_date(prev_timestamp) < timecut_date:
+                    job = (prev_id, prev_revid, prev_timestamp, urlbase, prev_title, prev_page, ordinal)
+
+                if job:
+                    print(job[0], job[2], time_cut)
+                    jobs_queue.put(job)  # put the last job
+                    ordinal += 1
+                    job = None
         else:
             curr_time = convert_timestamp_to_date(timestamp)
             prev_time = convert_timestamp_to_date(prev_timestamp)
             if (curr_time - prev_time).days > min_days_stable_page_version: # new stable version
-                for tl in time_cut_list:
-                    if prev_time < convert_timestamp_to_date(tl):
-                        # print(prev_id, prev_timestamp, tl)
-                        time_cut_data[tl] = (prev_id, prev_revid, prev_timestamp, urlbase, prev_title, prev_page, ordinal)
-                        ordinal += 1
-                        break
+                if prev_time < timecut_date:
+                    job = (prev_id, prev_revid, prev_timestamp, urlbase, prev_title, prev_page, ordinal)
         prev_id, prev_revid, prev_timestamp, prev_title, prev_page = id, revid, timestamp, title, page
     input.close()
 
@@ -536,7 +533,7 @@ def main() -> None:
             return
 
     process_dump(input_file, args.templates, output_path, file_size,
-                args.compress, args.processes, args.html_safe, not args.no_templates)
+                args.compress, args.timecut, args.processes, args.html_safe, not args.no_templates)
 
 if __name__ == '__main__':
     main()
