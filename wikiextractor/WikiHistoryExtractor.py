@@ -179,7 +179,7 @@ def load_templates(file: TextIO, output_file: Optional[str] = None) -> int:
     return templates
 
 
-def collect_pages(text: str) -> Iterator[tuple[str, str, str, str, list[Any]]]:
+def collect_pages(text: TextIO) -> Iterator[tuple[str, str, str, str, list[Any]]]:
     """
     :param text: the text of a wikipedia file dump.
     """
