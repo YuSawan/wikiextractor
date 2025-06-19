@@ -10,8 +10,8 @@ dependencies = [
 
 [project.scripts]
 wikiextractor = "wikiextractor.WikiExtractor:main"
-wikiextractor-history = "wikiextractor.WikiHistoryExtractor:main"
 extractPage = "wikiextractor.extractPage:main"
+splitRevision = "wikiextractor.splitRevision:main"
 
 [build-system]
 requires = ["hatchling"]
