@@ -306,8 +306,10 @@ def collect_pages(text):
             redirect = False
         elif tag == 'id' and not id:
             id = m.group(3)
-        elif tag == 'id' and id: # <revision> <id></id> </revision>
+        elif tag == 'id' and id and not revid: # <revision> <id></id> </revision>
             revid = m.group(3)
+        elif tag == 'id' and id and revid: # <contributor> <id></id> </contributor>
+            pass
         elif tag == 'title':
             title = m.group(3)
         elif tag == 'redirect':
@@ -322,8 +324,6 @@ def collect_pages(text):
             if m.group(1):
                 page.append(m.group(1))
             inText = False
-        elif inText:
-            page.append(line)
         elif tag == '/page':
             colon = title.find(':')
             if (colon < 0 or (title[:colon] in acceptedNamespaces)) and id != last_id and \
@@ -335,7 +335,8 @@ def collect_pages(text):
             page = []
             inText = False
             redirect = False
-
+        elif inText:
+            page.append(line)
 
 def process_dump(input_file, template_file, out_file, file_size, file_compress,
                  process_count, html_safe, expand_templates=True):
