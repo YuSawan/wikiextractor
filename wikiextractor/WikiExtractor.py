@@ -60,10 +60,10 @@ import os.path
 import re  # TODO use regex when it will be standard
 import sys
 from io import StringIO
-from multiprocessing import Queue, get_context, cpu_count
+from multiprocessing import Queue, cpu_count, get_context
 from timeit import default_timer
 
-from .extract import Extractor, ignoreTag, define_template, acceptedNamespaces
+from .extract import Extractor, acceptedNamespaces, define_template, ignoreTag
 
 # ===========================================================================
 
@@ -260,6 +260,8 @@ def load_templates(file, output_file=None):
     if output_file:
         output.close()
         logging.info("Saved %d templates to '%s'", templates, output_file)
+    logging.info("Preprocessed %d pages", articles)
+    logging.info("Templates '%s'", templates)
     return templates
 
 
@@ -324,8 +326,8 @@ def collect_pages(text):
             page.append(line)
         elif tag == '/page':
             colon = title.find(':')
-            if (colon < 0 or (title[:colon] in acceptedNamespaces) and id != last_id and
-                    not redirect and not title.startswith(templateNamespace)):
+            if (colon < 0 or (title[:colon] in acceptedNamespaces)) and id != last_id and \
+                    not redirect and not title.startswith(templateNamespace):
                 yield (id, revid, title, page)
                 last_id = id
             id = ''
