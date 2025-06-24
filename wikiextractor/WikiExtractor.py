@@ -386,7 +386,7 @@ def process_dump(input_file: str, template_file: str, out_file: str, file_size: 
                 Extractor.templatePrefix = templateNamespace + ':'
             elif re.search('key="828"', line):
                 moduleNamespace = m.group(3)
-                modulePrefix = moduleNamespace + ':'
+                _ = moduleNamespace + ':'
         elif tag == '/siteinfo':
             break
 
