@@ -5,14 +5,16 @@ description = "wikiextractor"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "beautifulsoup4>=4.13.4",
     "py7zr>=1.0.0",
-    "pytest>=8.4.0",
 ]
 
 [project.scripts]
 wikiextractor = "wikiextractor.WikiExtractor:main"
 extractPage = "wikiextractor.extractPage:main"
 splitRevision = "wikiextractor.splitRevision:main"
+convertel = "wikiextractor.convert_el:main"
+page2ids = "wikiextractor.page2ids:main"
 
 [build-system]
 requires = ["hatchling"]
