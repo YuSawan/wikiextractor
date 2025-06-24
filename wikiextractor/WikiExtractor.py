@@ -59,9 +59,11 @@ import logging
 import os.path
 import re  # TODO use regex when it will be standard
 import sys
+from gzip import GzipFile
 from io import StringIO
 from multiprocessing import Queue, cpu_count, get_context
 from timeit import default_timer
+from typing import IO, Any, Iterator, Optional, TextIO, Union
 
 from .extract import Extractor, acceptedNamespaces, define_template, ignoreTag
 
@@ -120,12 +122,12 @@ class NextFile():
 
     filesPerDir = 100
 
-    def __init__(self, path_name):
+    def __init__(self, path_name: str) -> None:
         self.path_name = path_name
         self.dir_index = -1
         self.file_index = -1
 
-    def next(self):
+    def next(self) -> str:
         self.file_index = (self.file_index + 1) % NextFile.filesPerDir
         if self.file_index == 0:
             self.dir_index += 1
@@ -134,12 +136,12 @@ class NextFile():
             os.makedirs(dirname)
         return self._filepath()
 
-    def _dirname(self):
+    def _dirname(self) -> str:
         char1 = self.dir_index % 26
         char2 = int(self.dir_index / 26) % 26
         return os.path.join(self.path_name, '%c%c' % (ord('A') + char2, ord('A') + char1))
 
-    def _filepath(self):
+    def _filepath(self) -> str:
         return '%s/wiki_%02d' % (self._dirname(), self.file_index)
 
 
@@ -149,7 +151,7 @@ class OutputSplitter():
     File-like object, that splits output to multiple files of a given max size.
     """
 
-    def __init__(self, nextFile, max_file_size=0, compress=True):
+    def __init__(self, nextFile: NextFile, max_file_size: int = 0, compress: bool = True) -> None:
         """
         :param nextFile: a NextFile object from which to obtain filenames
             to use.
@@ -161,22 +163,22 @@ class OutputSplitter():
         self.max_file_size = max_file_size
         self.file = self.open(self.nextFile.next())
 
-    def reserve(self, size):
+    def reserve(self, size: int) -> None:
         if self.file.tell() + size > self.max_file_size:
             self.close()
             self.file = self.open(self.nextFile.next())
 
-    def write(self, data):
+    def write(self, data: bytes) -> None:
         self.reserve(len(data))
         if self.compress:
             self.file.write(data)
         else:
             self.file.write(data)
 
-    def close(self):
+    def close(self) -> None:
         self.file.close()
 
-    def open(self, filename):
+    def open(self, filename: str) -> IO[Any]:
         if self.compress:
             return bz2.BZ2File(filename + '.bz2', 'w')
         else:
@@ -186,11 +188,13 @@ class OutputSplitter():
 # ----------------------------------------------------------------------
 # READER
 
+redirect_pattern = re.compile(r'(?i)^#REDIRECT \[\[(.*?)\]\]')
+disambiguation_pattern = re.compile(r'(?i){{disambig|Disambig}}')
 tagRE = re.compile(r'(.*?)<(/?\w+)[^>]*>(?:([^<]*)(<.*?>)?)?')
 #                    1     2               3      4
 
 
-def load_templates(file, output_file=None):
+def load_templates(file: Union[TextIO, IO[Any], GzipFile], output_file: Optional[str] =None) -> int:
     """
     Load templates from :param file:.
     :param output_file: file where to save templates and modules.
@@ -206,6 +210,7 @@ def load_templates(file, output_file=None):
     if output_file:
         output = open(output_file, 'w')
     for line in file:
+        assert isinstance(line, str)
         #line = line.decode('utf-8')
         if '<' not in line:  # faster than doing re.search()
             if inText:
@@ -265,7 +270,7 @@ def load_templates(file, output_file=None):
     return templates
 
 
-def decode_open(filename, mode='rt', encoding='utf-8'):
+def decode_open(filename: str, mode: str='rt', encoding: str='utf-8') -> Union[TextIO, IO[Any], GzipFile]:
     """
     Open a file, decode and decompress, depending on extension `gz`, or 'bz2`.
     :param filename: the file to open.
@@ -280,19 +285,21 @@ def decode_open(filename, mode='rt', encoding='utf-8'):
         return open(filename, mode, encoding=encoding)
 
 
-def collect_pages(text):
+def collect_pages(text: Union[TextIO, IO[Any], GzipFile]) -> Iterator[tuple[str, str, str, list[str]]]:
     """
     :param text: the text of a wikipedia file dump.
     """
     # we collect individual lines, since str.join() is significantly faster
     # than concatenation
-    page = []
+    page: list[str] = []
     id = ''
+    title = ''
     revid = ''
+    namespace = ''
     last_id = ''
     inText = False
-    redirect = False
     for line in text:
+        assert isinstance(line, str)
         if '<' not in line:     # faster than doing re.search()
             if inText:
                 page.append(line)
@@ -303,7 +310,6 @@ def collect_pages(text):
         tag = m.group(2)
         if tag == 'page':
             page = []
-            redirect = False
         elif tag == 'id' and not id:
             id = m.group(3)
         elif tag == 'id' and id and not revid: # <revision> <id></id> </revision>
@@ -312,8 +318,10 @@ def collect_pages(text):
             pass
         elif tag == 'title':
             title = m.group(3)
+        elif tag == 'ns':
+            namespace = m.group(3)
         elif tag == 'redirect':
-            redirect = True
+            pass
         elif tag == 'text':
             inText = True
             line = line[m.start(3):m.end(3)]
@@ -326,20 +334,20 @@ def collect_pages(text):
             inText = False
         elif tag == '/page':
             colon = title.find(':')
-            if (colon < 0 or (title[:colon] in acceptedNamespaces)) and id != last_id and \
-                    not redirect and not title.startswith(templateNamespace):
+            if (namespace == '0' or (title[:colon] in acceptedNamespaces)) and id != last_id and not title.startswith(templateNamespace):
                 yield (id, revid, title, page)
                 last_id = id
             id = ''
+            title = ''
             revid = ''
+            namespace = ''
             page = []
             inText = False
-            redirect = False
         elif inText:
             page.append(line)
 
-def process_dump(input_file, template_file, out_file, file_size, file_compress,
-                 process_count, html_safe, expand_templates=True):
+def process_dump(input_file: str, template_file: str, out_file: str, file_size: int, file_compress: bool,
+                 process_count: int, html_safe: bool, expand_templates: bool = True) -> None:
     """
     :param input_file: name of the wikipedia dump file; '-' to read from stdin
     :param template_file: optional file with template definitions.
@@ -360,6 +368,7 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
 
     # collect siteinfo
     for line in input:
+        assert isinstance(line, str)
         line = line #.decode('utf-8')
         m = tagRE.search(line)
         if not m:
@@ -421,14 +430,14 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
 
     maxsize = 10 * process_count
     # output queue
-    output_queue = Queue(maxsize=maxsize)
+    output_queue: Queue = Queue(maxsize=maxsize)
 
     # Reduce job that sorts and prints output
     reduce = Process(target=reduce_process, args=(output_queue, output))
     reduce.start()
 
     # initialize jobs queue
-    jobs_queue = Queue(maxsize=maxsize)
+    jobs_queue: Queue = Queue(maxsize=maxsize)
 
     # start worker processes
     logging.info("Using %d extract processes.", process_count)
@@ -447,9 +456,13 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
 
     ordinal = 0  # page count
     for id, revid, title, page in collect_pages(input):
-        job = (id, revid, urlbase, title, page, ordinal)
-        jobs_queue.put(job)  # goes to any available extract_process
-        ordinal += 1
+        source = ''.join(page).strip()
+        find_redirect = redirect_pattern.search(source)
+        find_disambig = disambiguation_pattern.search(source)
+        if not find_redirect and not find_disambig:
+            job = (id, revid, urlbase, title, page, ordinal)
+            jobs_queue.put(job)  # goes to any available extract_process
+            ordinal += 1
 
     input.close()
 
@@ -469,15 +482,14 @@ def process_dump(input_file, template_file, out_file, file_size, file_compress,
         output.close()
     extract_duration = default_timer() - extract_start
     extract_rate = ordinal / extract_duration
-    logging.info("Finished %d-process extraction of %d articles in %.1fs (%.1f art/s)",
-                 process_count, ordinal, extract_duration, extract_rate)
+    logging.info("Finished %d-process extraction of %d articles in %.1fs (%.1f art/s)", process_count, ordinal, extract_duration, extract_rate)
 
 
 # ----------------------------------------------------------------------
 # Multiprocess support
 
 
-def extract_process(jobs_queue, output_queue, html_safe):
+def extract_process(jobs_queue: Queue, output_queue: Queue, html_safe: bool) -> None:
     """Pull tuples of raw page content, do CPU/regex-heavy fixup, push finished text
     :param jobs_queue: where to get jobs.
     :param output_queue: where to queue extracted text for output.
@@ -495,7 +507,7 @@ def extract_process(jobs_queue, output_queue, html_safe):
             break
 
 
-def reduce_process(output_queue, output):
+def reduce_process(output_queue: Queue, output: Union[TextIO, IO[Any], GzipFile]) -> None:
     """
     Pull finished article text, write series of files (or stdout)
     :param output_queue: text to be output.
@@ -505,7 +517,7 @@ def reduce_process(output_queue, output):
     interval_start = default_timer()
     period = 100000
     # FIXME: use a heap
-    ordering_buffer = {}  # collected pages
+    ordering_buffer: dict[int, str] = {}  # collected pages
     next_ordinal = 0  # sequence number of pages
     while True:
         if next_ordinal in ordering_buffer:
@@ -532,13 +544,13 @@ def reduce_process(output_queue, output):
 minFileSize = 200 * 1024
 
 
-def main():
+def main() -> None:
     global acceptedNamespaces
     global templateCache
 
     parser = argparse.ArgumentParser(prog=os.path.basename(sys.argv[0]),
-                                     formatter_class=argparse.RawDescriptionHelpFormatter,
-                                     description=__doc__)
+                                    formatter_class=argparse.RawDescriptionHelpFormatter,
+                                    description=__doc__)
     parser.add_argument("input",
                         help="XML wiki dump file")
     groupO = parser.add_argument_group('Output')
@@ -599,7 +611,8 @@ def main():
         return
 
     if args.namespaces:
-        acceptedNamespaces = set(args.namespaces.split(','))
+        acceptedNamespaces = list(set(args.namespaces.split(',')))
+        Extractor.acceptedNamespaces += acceptedNamespaces
 
     FORMAT = '%(levelname)s: %(message)s'
     logging.basicConfig(format=FORMAT)
