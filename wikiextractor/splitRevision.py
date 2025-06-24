@@ -22,8 +22,9 @@ def get_header_footer(input_file: str) -> tuple[str, str, str]:
     input = decode_open(input_file)
 
     # collect siteinfo
-    lines = []
+    lines: list[str] = []
     for line in input:
+        assert isinstance(line, str), "Input must be a text file"
         line = line #.decode('utf-8')
         lines.append(line)
         m = tagRE.search(line)
@@ -58,10 +59,10 @@ def collect_pages(text: TextIO, templateNamespace: str) -> Iterator[tuple[str, s
     page = []
     id = ''
     revid = ''
+    namespace = ''
     timestamp = ''
     last_revid = ''
     inText = False
-    redirect = False
     for line in text:
         if '<' not in line:     # faster than doing re.search()
             if inText:
@@ -72,22 +73,22 @@ def collect_pages(text: TextIO, templateNamespace: str) -> Iterator[tuple[str, s
             continue
         tag = m.group(2)
         if tag == 'page':
-            redirect = False
+            pass
         elif tag == 'title':
             title = m.group(3)
+        elif tag == 'ns':
+            namespace = m.group(3)
         elif tag == 'id' and not id:
             id = m.group(3)
         elif tag == 'redirect':
-            redirect = True
+            pass
         elif tag == 'revision':
             inText = True
             page = []
         elif tag == '/revision':
             inText = False
             colon = title.find(':')
-            # print((colon < 0 or title[:colon] in acceptedNamespaces) and last_revid != revid and \
-                    # not redirect and not title.startswith(templateNamespace))
-            if (colon < 0 or title[:colon] in acceptedNamespaces + [templateNamespace]) and last_revid != revid and not redirect:
+            if (namespace == '0' or title[:colon] in acceptedNamespaces + [templateNamespace]) and last_revid != revid:
                 yield id, revid, timestamp, title, page
                 last_revid = revid
             revid = ''
@@ -96,7 +97,7 @@ def collect_pages(text: TextIO, templateNamespace: str) -> Iterator[tuple[str, s
             inText = False
         elif tag == '/page':
             id = ''
-            redirect = False
+            namespace = ''
         else:
             page.append(line)
             if tag == 'id' and id and not revid: # <revision> <id></id> </revision>
@@ -116,6 +117,7 @@ def collect_pages(text: TextIO, templateNamespace: str) -> Iterator[tuple[str, s
 
 def split_history(input_file: str, templateNamespace: str, timecut: str, min_days_stable_page_version: int) -> Iterator[tuple[str, str, list[str]]]:
     input = decode_open(input_file)
+    assert isinstance(input, TextIO), "Input must be a text file"
 
     ordinal = 0  # page count
     prev_id = ''

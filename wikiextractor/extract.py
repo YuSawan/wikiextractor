@@ -56,7 +56,7 @@ discardElements = [
 # wiktionary: Wiki dictionary
 # wikt: shortcut for Wiktionary
 #
-acceptedNamespaces = ['w', 'wiktionary', 'wikt']
+acceptedNamespaces = ['w', 'wiktionary', 'wikt', 'wikipedia', 'Wikipedia']
 
 
 def get_url(urlbase, uid):
@@ -66,7 +66,7 @@ def get_url(urlbase, uid):
 # ======================================================================
 
 
-def clean(extractor, text, expand_templates=False, html_safe=True):
+def clean(extractor, text, expand_templates=False, html_safe=True, namespaces = None):
     """
     Transforms wiki markup. If the command line flag --escapedoc is set then the text is also escaped
     @see https://www.mediawiki.org/wiki/Help:Formatting
@@ -92,7 +92,7 @@ def clean(extractor, text, expand_templates=False, html_safe=True):
     text = replaceExternalLinks(text)
 
     # replace internal links
-    text = replaceInternalLinks(text)
+    text = replaceInternalLinks(text, namespaces=namespaces)
 
     # drop MagicWords behavioral switches
     text = magicWordsRE.sub('', text)
@@ -195,7 +195,7 @@ def compact(text, mark_headers=False):
     emptySection = False  # empty sections are discarded
     listLevel = ''  # nesting of lists
 
-    for line in text.split('\n'):
+    for i, line in enumerate(text.split('\n')):
 
         if not line:
             if len(listLevel):    # implies Extractor.HtmlFormatting
@@ -253,9 +253,13 @@ def compact(text, mark_headers=False):
                     listLevel += type
                     line = line[l+1:].strip()
                 else:
-                    # continue on same level
-                    type = line[l-1]
-                    line = line[l:].strip()
+                    try:
+                        # continue on same level
+                        type = line[l-1]
+                        line = line[l:].strip()
+                    except IndexError:
+                        logging.warning("Error processing line %d: %s" % (i, line))
+                        continue
                 page.append(listItem[type] % line)
             else:
                 continue
@@ -443,7 +447,7 @@ def makeExternalImage(url, alt=''):
 # Also: [[Help:IPA for Catalan|[andora]]]
 
 
-def replaceInternalLinks(text):
+def replaceInternalLinks(text, namespaces):
     """
     Replaces external links of the form:
     [[title |...|label]]trail
@@ -478,14 +482,14 @@ def replaceInternalLinks(text):
                     pipe = last  # advance
                 curp = e1
             label = inner[pipe + 1:].strip()
-        res += text[cur:s] + makeInternalLink(title, label) + trail
+        res += text[cur:s] + makeInternalLink(title, label, namespaces) + trail
         cur = end
     return res + text[cur:]
 
 
-def makeInternalLink(title, label):
+def makeInternalLink(title, label, namespaces: list[str]):
     colon = title.find(':')
-    if colon > 0 and title[:colon] not in acceptedNamespaces:
+    if colon > 0 and title[:colon] not in acceptedNamespaces + namespaces:
         return ''
     if colon == 0:
         # drop also :File:
@@ -926,6 +930,8 @@ class Extractor():
     # Obtained from TemplateNamespace
     templatePrefix = ''
 
+    acceptedNamespaces = ['w', 'wiktionary', 'wikt', 'wikipedia', 'Wikipedia']
+
     def __init__(self, id, revid, urlbase, title, page):
         """
         :param page: a list of lines.
@@ -959,7 +965,7 @@ class Extractor():
         self.magicWords['currenttime'] = time.strftime('%H:%M:%S')
 
         text = clean(self, text, expand_templates=expand_templates,
-                     html_safe=html_safe)
+                     html_safe=html_safe, namespaces = self.acceptedNamespaces)
 
         text = compact(text, mark_headers=mark_headers)
         return text
