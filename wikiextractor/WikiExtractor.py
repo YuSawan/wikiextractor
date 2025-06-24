@@ -43,8 +43,8 @@ Each file will contain several documents in the format:
         ...
         </doc>
 
-If the program is invoked with the --json flag, then each file will                                            
-contain several documents formatted as json ojects, one per line, with                                         
+If the program is invoked with the --json flag, then each file will
+contain several documents formatted as json objects, one per line, with
 the following structure
 
     {"id": "", "revid": "", "url": "", "title": "", "text": "..."}
@@ -201,7 +201,7 @@ def load_templates(file: Union[TextIO, IO[Any], GzipFile], output_file: Optional
     :return: number of templates loaded.
     """
     global templateNamespace
-    global moduleNamespace, modulePrefix
+    global moduleNamespace
     modulePrefix = moduleNamespace + ':'
     articles = 0
     templates = 0
@@ -347,7 +347,7 @@ def collect_pages(text: Union[TextIO, IO[Any], GzipFile]) -> Iterator[tuple[str,
             page.append(line)
 
 def process_dump(input_file: str, template_file: str, out_file: str, file_size: int, file_compress: bool,
-                 process_count: int, html_safe: bool, expand_templates: bool = True) -> None:
+                process_count: int, html_safe: bool, expand_templates: bool = True) -> None:
     """
     :param input_file: name of the wikipedia dump file; '-' to read from stdin
     :param template_file: optional file with template definitions.
@@ -360,7 +360,7 @@ def process_dump(input_file: str, template_file: str, out_file: str, file_size: 
     """
     global knownNamespaces
     global templateNamespace
-    global moduleNamespace, modulePrefix
+    global moduleNamespace
 
     urlbase = ''                # This is obtained from <siteinfo>
 
@@ -409,8 +409,8 @@ def process_dump(input_file: str, template_file: str, out_file: str, file_size: 
         template_load_elapsed = default_timer() - template_load_start
         logging.info("Loaded %d templates in %.1fs", templates, template_load_elapsed)
 
+    output: TextIO | OutputSplitter = sys.stdout
     if out_file == '-':
-        output = sys.stdout
         if file_compress:
             logging.warn("writing to stdout, so no output compression (use an external tool)")
     else:
@@ -517,7 +517,7 @@ def reduce_process(output_queue: Queue, output: Union[TextIO, IO[Any], GzipFile]
     interval_start = default_timer()
     period = 100000
     # FIXME: use a heap
-    ordering_buffer: dict[int, str] = {}  # collected pages
+    ordering_buffer: dict[int, Any] = {}  # collected pages
     next_ordinal = 0  # sequence number of pages
     while True:
         if next_ordinal in ordering_buffer:
@@ -527,7 +527,7 @@ def reduce_process(output_queue: Queue, output: Union[TextIO, IO[Any], GzipFile]
             if next_ordinal % period == 0:
                 interval_rate = period / (default_timer() - interval_start)
                 logging.info("Extracted %d articles (%.1f art/s)",
-                             next_ordinal, interval_rate)
+                            next_ordinal, interval_rate)
                 interval_start = default_timer()
         else:
             # mapper puts None to signal finish
@@ -648,12 +648,12 @@ def main() -> None:
     if output_path != '-' and not os.path.isdir(output_path):
         try:
             os.makedirs(output_path)
-        except:
+        except Exception:
             logging.error('Could not create: %s', output_path)
             return
 
     process_dump(input_file, args.templates, output_path, file_size,
-                 args.compress, args.processes, args.html_safe, not args.no_templates)
+                args.compress, args.processes, args.html_safe, not args.no_templates)
 
 if __name__ == '__main__':
     main()

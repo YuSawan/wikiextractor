@@ -2,7 +2,7 @@ import argparse
 import logging
 import re
 from datetime import datetime
-from typing import Any, Iterator, TextIO
+from typing import Any, Iterator
 
 from .extract import acceptedNamespaces
 from .WikiExtractor import decode_open, tagRE
@@ -50,12 +50,14 @@ def get_header_footer(input_file: str) -> tuple[str, str, str]:
     return header, footer, templateNamespace
 
 
-def collect_pages(text: TextIO, templateNamespace: str) -> Iterator[tuple[str, str, str, str, list[Any]]]:
+def collect_pages(input_file: str, templateNamespace: str) -> Iterator[tuple[str, str, str, str, list[Any]]]:
     """
     :param text: the text of a wikipedia file dump.
     """
     # we collect individual lines, since str.join() is significantly faster
     # than concatenation
+    input = decode_open(input_file)
+
     page = []
     id = ''
     revid = ''
@@ -63,7 +65,8 @@ def collect_pages(text: TextIO, templateNamespace: str) -> Iterator[tuple[str, s
     timestamp = ''
     last_revid = ''
     inText = False
-    for line in text:
+    for line in input:
+        assert isinstance(line, str), "Input must be a text file"
         if '<' not in line:     # faster than doing re.search()
             if inText:
                 page.append(line)
@@ -113,12 +116,10 @@ def collect_pages(text: TextIO, templateNamespace: str) -> Iterator[tuple[str, s
                 pass
             # elif inText:
             #     page.append(line)
+    input.close()
 
 
 def split_history(input_file: str, templateNamespace: str, timecut: str, min_days_stable_page_version: int) -> Iterator[tuple[str, str, list[str]]]:
-    input = decode_open(input_file)
-    assert isinstance(input, TextIO), "Input must be a text file"
-
     ordinal = 0  # page count
     prev_id = ''
     prev_timestamp = ''
@@ -126,7 +127,7 @@ def split_history(input_file: str, templateNamespace: str, timecut: str, min_day
     prev_page = None
     job = None
     timecut_date = convert_timestamp_to_date(timecut)
-    for id, _, timestamp, title, page in collect_pages(input, templateNamespace):
+    for id, _, timestamp, title, page in collect_pages(input_file, templateNamespace):
         if prev_id != id: # new page id
             if prev_id:
                 if convert_timestamp_to_date(prev_timestamp) < timecut_date:
@@ -148,7 +149,6 @@ def split_history(input_file: str, templateNamespace: str, timecut: str, min_day
     if prev_id and prev_title and prev_page is not None:
         if convert_timestamp_to_date(prev_timestamp) < timecut_date:
             yield prev_id, prev_title, prev_page
-    input.close()
 
 
 def convert_xml(input_file: str, output_file: str, time_cut: str, min_days_stable_page_version: int) -> None:
