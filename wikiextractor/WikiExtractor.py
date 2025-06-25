@@ -256,7 +256,6 @@ def load_templates(file: Union[TextIO, IO[Any], GzipFile], output_file: Optional
         output.close()
         logging.info("Saved %d templates to '%s'", templates, output_file)
     logging.info("Preprocessed %d pages", articles)
-    logging.info("Templates '%s'", templates)
     return templates
 
 
@@ -461,7 +460,7 @@ def process_dump(input_file: str, template_file: str, out_file: str, file_size: 
             "redirect": find_redirect.group(1) if find_redirect else None
         })
         if not find_redirect:
-            job = (id, revid, urlbase, title, page, ordinal)
+            job = (id, revid, timestamp, urlbase, title, page, ordinal)
             jobs_queue.put(job)  # goes to any available extract_process
             ordinal += 1
 

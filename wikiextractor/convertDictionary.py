@@ -127,12 +127,12 @@ def split_span(text: str, spans: list[tuple[int, int, str, str]]) -> tuple[list[
     return filtered_text, filtered_span
 
 
-def convert_for_entity_linking(input_file: str) -> Iterator[tuple[str, str, list[dict[str, Any]]]]:
+def convert_for_entity_linking(input_file: str) -> Iterator[tuple[str, str, str, list[dict[str, Any]]]]:
     input = decode_open(input_file, encoding='utf-8')
     for line in input:
         examples: list[dict[str, Any]] = []
         data = json.loads(line)
-        id, title = data['id'], html.unescape(data['title'])
+        id, title, timestamp = data['id'], html.unescape(data['title']), data['timestamp']
 
         text = html.unescape(data['text'])
         soup = BeautifulSoup(text, 'html.parser')
@@ -147,9 +147,13 @@ def convert_for_entity_linking(input_file: str) -> Iterator[tuple[str, str, list
             texts, split_spans = split_span(text, spans)
             for txt, ss in zip(texts, split_spans):
                 d.append({"text": txt, "entities": ss})
+            
+            if not examples and header not in ['Abstract', 'Definition', 'Description']:
+                logger.warning('This article does not have any description for itself: %s', title)
+                break
             examples.append({header: d})
 
-        yield id, title, examples
+        yield id, title, timestamp, examples
 
 
 def main() -> None:
@@ -160,9 +164,9 @@ def main() -> None:
 
     os.makedirs(args.output_dir, exist_ok=True)
     dictionary_output = open(os.path.join(args.output_dir, 'dictionary.json'), 'w')
-    for id, title, examples in convert_for_entity_linking(args.input_file):
+    for id, title, timestamp, examples in convert_for_entity_linking(args.input_file):
         if examples:
-            dictionary_output.write(json.dumps({"id": id, "title": title, "text": examples}, ensure_ascii=False) + '\n')
+            dictionary_output.write(json.dumps({"id": id, "timestamp": timestamp, "title": title, "text": examples}, ensure_ascii=False) + '\n')
     dictionary_output.close()
 
 if __name__ == "__main__":

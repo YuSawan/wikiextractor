@@ -109,12 +109,13 @@ class Extractor():
 
     acceptedNamespaces = ['w', 'wiktionary', 'wikt', 'wikipedia', 'Wikipedia']
 
-    def __init__(self, id: str, revid: str, urlbase: str, title: str, page: list[str]) -> None:
+    def __init__(self, id: str, revid: str, timestamp: str, urlbase: str, title: str, page: list[str]) -> None:
         """
         :param page: a list of lines.
         """
         self.id = id
         self.revid = revid
+        self.timestamp = timestamp
         self.url = get_url(urlbase, id)
         self.title = title
         self.page = page
@@ -158,8 +159,9 @@ class Extractor():
 
         if self.to_json:
             json_data = {
-		'id': self.id,
+                'id': self.id,
                 'revid': self.revid,
+                'timestamp': self.timestamp,
                 'url': self.url,
                 'title': self.title,
                 'text': cleaned_text
