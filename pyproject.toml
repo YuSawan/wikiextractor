@@ -15,6 +15,7 @@ extractPage = "wikiextractor.extractPage:main"
 splitRevision = "wikiextractor.splitRevision:main"
 convertDictionary = "wikiextractor.convertDictionary:main"
 pageHistory = "wikiextractor.pageHistory:main"
+createDataset = "wikiextractor.createDataset:main"
 
 [build-system]
 requires = ["hatchling"]
