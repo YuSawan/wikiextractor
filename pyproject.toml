@@ -13,8 +13,8 @@ dependencies = [
 wikiextractor = "wikiextractor.WikiExtractor:main"
 extractPage = "wikiextractor.extractPage:main"
 splitRevision = "wikiextractor.splitRevision:main"
-convertel = "wikiextractor.convert_el:main"
-page2ids = "wikiextractor.page2ids:main"
+convertDictionary = "wikiextractor.convertDictionary:main"
+pageHistory = "wikiextractor.pageHistory:main"
 
 [build-system]
 requires = ["hatchling"]

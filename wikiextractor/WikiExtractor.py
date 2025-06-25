@@ -55,6 +55,7 @@ collecting template definitions.
 
 import argparse
 import bz2
+import json
 import logging
 import os.path
 import re  # TODO use regex when it will be standard
@@ -274,7 +275,7 @@ def decode_open(filename: str, mode: str='rt', encoding: str='utf-8') -> Union[T
         return open(filename, mode, encoding=encoding)
 
 
-def collect_pages(text: Union[TextIO, IO[Any], GzipFile]) -> Iterator[tuple[str, str, str, list[str]]]:
+def collect_pages(text: Union[TextIO, IO[Any], GzipFile]) -> Iterator[tuple[str, str, str, str, list[str]]]:
     """
     :param text: the text of a wikipedia file dump.
     """
@@ -286,6 +287,7 @@ def collect_pages(text: Union[TextIO, IO[Any], GzipFile]) -> Iterator[tuple[str,
     revid = ''
     namespace = ''
     last_id = ''
+    timestamp = ''
     inText = False
     for line in text:
         assert isinstance(line, str)
@@ -305,6 +307,8 @@ def collect_pages(text: Union[TextIO, IO[Any], GzipFile]) -> Iterator[tuple[str,
             revid = m.group(3)
         elif tag == 'id' and id and revid: # <contributor> <id></id> </contributor>
             pass
+        elif tag == 'timestamp': # <revision> <id></id> </revision>
+            timestamp = m.group(3)
         elif tag == 'title':
             title = m.group(3)
         elif tag == 'ns':
@@ -324,12 +328,13 @@ def collect_pages(text: Union[TextIO, IO[Any], GzipFile]) -> Iterator[tuple[str,
         elif tag == '/page':
             colon = title.find(':')
             if (namespace == '0' or (title[:colon] in acceptedNamespaces)) and id != last_id and not title.startswith(templateNamespace):
-                yield (id, revid, title, page)
+                yield (id, revid, timestamp, title, page)
                 last_id = id
             id = ''
             title = ''
             revid = ''
             namespace = ''
+            timestamp = ''
             page = []
             inText = False
         elif inText:
@@ -444,11 +449,18 @@ def process_dump(input_file: str, template_file: str, out_file: str, file_size: 
     # than concatenation
 
     ordinal = 0  # page count
-    for id, revid, title, page in collect_pages(input):
+    pages2ids = []
+    for id, revid, timestamp, title, page in collect_pages(input):
         source = ''.join(page).strip()
         find_redirect = redirect_pattern.search(source)
         find_disambig = disambiguation_pattern.search(source)
-        if not find_redirect and not find_disambig:
+        if find_disambig:
+            continue
+        pages2ids.append({
+            "id": id, "timestamp": timestamp, "title": title,
+            "redirect": find_redirect.group(1) if find_redirect else None
+        })
+        if not find_redirect:
             job = (id, revid, urlbase, title, page, ordinal)
             jobs_queue.put(job)  # goes to any available extract_process
             ordinal += 1
@@ -473,6 +485,10 @@ def process_dump(input_file: str, template_file: str, out_file: str, file_size: 
     extract_rate = ordinal / extract_duration
     logging.info("Finished %d-process extraction of %d articles in %.1fs (%.1f art/s)", process_count, ordinal, extract_duration, extract_rate)
 
+    with open(os.path.join(out_file, 'pages2ids.jsonl'), 'w', encoding='utf-8') as f:
+        # write pages2ids as json
+        for page2id in pages2ids:
+            f.write(json.dumps(page2id, ensure_ascii=False)+'\n')
 
 # ----------------------------------------------------------------------
 # Multiprocess support
@@ -629,7 +645,7 @@ def main() -> None:
 
         urlbase = ''
         with open(input_file) as input:
-            for id, revid, title, page in collect_pages(input):
+            for id, revid, _, title, page in collect_pages(input):
                 Extractor(id, revid, urlbase, title, page).extract(sys.stdout)
         return
 
