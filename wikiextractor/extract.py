@@ -27,6 +27,8 @@ from html.entities import name2codepoint
 from typing import Any, Callable, Iterable, Iterator, Optional, TextIO
 from urllib.parse import quote as urlencode
 
+from bs4 import BeautifulSoup
+
 # ----------------------------------------------------------------------
 
 # match tail after wikilink
@@ -517,8 +519,16 @@ def clean(extractor: Extractor, text: str, expand_templates: bool=False, html_sa
     # residuals of unbalanced quotes
     text = text.replace("'''", '').replace("''", '"')
 
-    # Collect spans
+    if extractor.HtmlFormatting:
+        # if there is any move_infobox in templates, then remove them with BeautifulSoup
+        soup = BeautifulSoup(text, 'html.parser')
+        for content in soup.find_all(['div']):
+            div_class = content.get('class')
+            if div_class and 'move_infobox' in div_class:
+                _ = content.extract()
+        text = str(soup)
 
+    # Collect spans
     spans = []
     # Drop HTML comments
     for m in comment.finditer(text):
@@ -1001,7 +1011,7 @@ class MagicWords():
         '__NOTOC__',
         '__FORCETOC__',
         '__TOC__',
-        '__TOC__',
+        '__NOEDITSECTION__',
         '__NEWSECTIONLINK__',
         '__NONEWSECTIONLINK__',
         '__NOGALLERY__',
@@ -1015,7 +1025,8 @@ class MagicWords():
         '__INDEX__',
         '__NOINDEX__',
         '__STATICREDIRECT__',
-        '__DISAMBIG__'
+        '__DISAMBIG__',
+        '__NOWYSIWYG__',
     )
 
 
@@ -1510,7 +1521,7 @@ def findBalanced(text: str, openDelim: list[str], closeDelim: list[str]) -> Iter
             stack.append(delim)
             nextPat = afterPat[delim]
         else:
-            # opening = stack.pop()
+            opening = stack.pop()
             # assert opening == openDelim[closeDelim.index(next.group(0))]
             if stack:
                 nextPat = afterPat[stack[-1]]
