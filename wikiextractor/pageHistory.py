@@ -3,9 +3,10 @@ import json
 import logging
 import re
 from typing import Iterator
+import html
 
 from .extract import acceptedNamespaces
-from .WikiExtractor import decode_open, redirect_pattern, tagRE
+from .WikiExtractor import decode_open, redirect_patterns, tagRE
 
 FORMAT = '%(levelname)s: %(message)s'
 logging.basicConfig(format=FORMAT)
@@ -100,8 +101,13 @@ def collect_comments(input_file: str) -> Iterator[tuple[str, str, list[str], lis
             if prev_id: # new page id
                 yield prev_id, prev_title, prev_timestamps, prev_comments, prev_redirects
             prev_id, prev_title, prev_timestamps, prev_comments, prev_redirects = id, title, [], [], []
-        result_pattern = redirect_pattern.search(''.join(page))
-        prev_redirects.append(True if result_pattern is not None else False)
+        find_redirect = False
+        for redirect_pattern in redirect_patterns:
+            result_pattern = redirect_pattern.search(''.join(page))
+            if result_pattern:
+                find_redirect = True
+                break
+        prev_redirects.append(find_redirect)
         prev_timestamps.append(timestamp)
         prev_comments.append(comment)
 
@@ -128,8 +134,8 @@ def get_titlechange_history(input_file: str, output_file: str) -> None:
                         new_page_title = None
             if old_page_title and new_page_title:
                 if not r:
-                    history.append({"timestamp": t, "old_page_title": old_page_title, "new_page_title": new_page_title, "redirect": r})
-        output.write(json.dumps({"id": id, "title": title, "history": history}, ensure_ascii=False) + '\n')
+                    history.append({"timestamp": t, "old_page_title": html.unescape(old_page_title), "new_page_title": html.unescape(new_page_title), "redirect": r})
+        output.write(json.dumps({"id": id, "title": html.unescape(title), "history": history}, ensure_ascii=False) + '\n')
         if i % 1000 == 0:
             logging.info(f"Processed {i} pages...")
     output.close()

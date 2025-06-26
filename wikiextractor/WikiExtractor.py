@@ -55,6 +55,7 @@ collecting template definitions.
 
 import argparse
 import bz2
+import html
 import json
 import logging
 import os.path
@@ -178,7 +179,12 @@ class OutputSplitter():
 # ----------------------------------------------------------------------
 # READER
 
-redirect_pattern = re.compile(r'(?i)^#REDIRECT \[\[(.*?)\]\]')
+redirect_patterns = [
+    re.compile(r'(?i)^#REDIRECT \[\[(.*?)\]\]'),
+    re.compile(r'(?i)^#REDIRECT\[\[(.*?)\]\]'),
+    re.compile(r'(?i)^#REDIRECT: \[\[(.*?)\]\]'),
+    re.compile(r'(?i)^#REDIRECT:\[\[(.*?)\]\]')
+]
 disambiguation_pattern = re.compile(r'(?i){{disambig|Disambig}}')
 tagRE = re.compile(r'(.*?)<(/?\w+)[^>]*>(?:([^<]*)(<.*?>)?)?')
 #                    1     2               3      4
@@ -451,15 +457,23 @@ def process_dump(input_file: str, template_file: str, out_file: str, file_size: 
     pages2ids = []
     for id, revid, timestamp, title, page in collect_pages(input):
         source = ''.join(page).strip()
-        find_redirect = redirect_pattern.search(source)
+
         find_disambig = disambiguation_pattern.search(source)
         if find_disambig:
             continue
+
+        redirect_title = None
+        for curr_redirect_pattern in redirect_patterns:
+            result_pattern = curr_redirect_pattern.search(source)
+            if result_pattern:
+                redirect_title = html.unescape(result_pattern.group(1))
+                break
+
         pages2ids.append({
-            "id": id, "timestamp": timestamp, "title": title,
-            "redirect": find_redirect.group(1) if find_redirect else None
+            "id": id, "timestamp": timestamp, "title": html.unescape(title),
+            "redirect": redirect_title
         })
-        if not find_redirect:
+        if not redirect_title:
             job = (id, revid, timestamp, urlbase, title, page, ordinal)
             jobs_queue.put(job)  # goes to any available extract_process
             ordinal += 1
@@ -644,8 +658,8 @@ def main() -> None:
 
         urlbase = ''
         with open(input_file) as input:
-            for id, revid, _, title, page in collect_pages(input):
-                Extractor(id, revid, urlbase, title, page).extract(sys.stdout)
+            for id, revid, timestamp, title, page in collect_pages(input):
+                Extractor(id, revid, timestamp, urlbase, title, page).extract(sys.stdout)
         return
 
     output_path = args.output

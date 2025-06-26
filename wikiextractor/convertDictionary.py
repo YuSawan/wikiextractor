@@ -53,13 +53,7 @@ def get_offsets(soup: BeautifulSoup) -> Iterator[tuple[str, str, list[tuple[int,
                 begin = 0
             if content.name == 'a':
                 anchor = unicodedata.normalize('NFKC', content.text)
-                try:
-                    title = html.unescape(urldecode(content.get('href')))
-                except TypeError:
-                    for n, c in enumerate(contents):
-                        print(n, c)
-                    print(i, content)
-                    raise TypeError
+                title = html.unescape(urldecode(content.get('href')))
                 if title:
                     spans.append((begin, begin + len(anchor), anchor, title))
                 if i < len(contents) - 1 and contents[i+1].text and contents[i+1].text[0] not in punctuation:
@@ -147,7 +141,7 @@ def convert_for_entity_linking(input_file: str) -> Iterator[tuple[str, str, str,
             texts, split_spans = split_span(text, spans)
             for txt, ss in zip(texts, split_spans):
                 d.append({"text": txt, "entities": ss})
-            
+
             if not examples and header not in ['Abstract', 'Definition', 'Description']:
                 logger.warning('This article does not have any description for itself: %s', title)
                 break
@@ -159,11 +153,11 @@ def convert_for_entity_linking(input_file: str) -> Iterator[tuple[str, str, str,
 def main() -> None:
     parser = argparse.ArgumentParser(description="Split a history file into multiple files based on the number of lines.")
     parser.add_argument("--input_file", "-i", type=str, help="The input xml file to split.")
-    parser.add_argument("--output_dir", "-o", type=str, default='output', help="The output xml file to split following to the timecut.")
+    parser.add_argument("--output_file", "-o", type=str, default='output', help="The output xml file to split following to the timecut.")
     args = parser.parse_args()
 
     os.makedirs(args.output_dir, exist_ok=True)
-    dictionary_output = open(os.path.join(args.output_dir, 'dictionary.json'), 'w')
+    dictionary_output = open(args.output_file, 'w')
     for id, title, timestamp, examples in convert_for_entity_linking(args.input_file):
         if examples:
             dictionary_output.write(json.dumps({"id": id, "timestamp": timestamp, "title": title, "text": examples}, ensure_ascii=False) + '\n')
