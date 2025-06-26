@@ -119,44 +119,89 @@ def collect_pages(input_file: str, templateNamespace: str) -> Iterator[tuple[str
     input.close()
 
 
-def split_history(input_file: str, templateNamespace: str, timecut: str, min_days_stable_page_version: int) -> Iterator[tuple[str, str, list[str]]]:
-    ordinal = 0  # page count
-    prev_id = ''
-    prev_timestamp = ''
-    prev_title = ''
-    prev_page = None
-    job = None
-    timecut_date = convert_timestamp_to_date(timecut)
+def get_stable_period(curr_time: datetime, prev_time: datetime, timecut: datetime, lookback: datetime) -> float:
+    """
+    Decide if the timestamp is within the lookback period and before the timecut.
+    """
+    gap = curr_time - prev_time
+    if prev_time < lookback:
+        gap -= (lookback - prev_time)
+    if curr_time > timecut:
+        gap -= (curr_time - timecut)
+    return gap.total_seconds()
+
+
+def split_history(input_file: str, templateNamespace: str, timecut: str, min_days_stable_page_version: int, max_look_back_for_stable_page_version: int) -> Iterator[tuple[str, str, list[str]]]:
+    prev_id, prev_title = '', ''
+    prev_revision_date, prev_revision_page = None, None
+    secure_revision_page = None
+    max_time_lapse_between_revisions = 0.
+    filtered_date = convert_timestamp_to_date(timecut)
     for id, _, timestamp, title, page in collect_pages(input_file, templateNamespace):
-        if prev_id != id: # new page id
+        if prev_id != id:
             if prev_id:
-                if convert_timestamp_to_date(prev_timestamp) < timecut_date:
-                    job = (prev_id, prev_title, prev_page)
-                if job:
-                    assert job[2] is not None
-                    yield job
-                    # jobs_queue.put(job)  # put the last job
-                    ordinal += 1
-                    job = None
-        else:
-            curr_time = convert_timestamp_to_date(timestamp)
-            prev_time = convert_timestamp_to_date(prev_timestamp)
-            if (curr_time - prev_time).days > min_days_stable_page_version: # new stable version
-                if prev_time < timecut_date:
-                    job = (prev_id, prev_title, prev_page)
-        prev_id, prev_timestamp, prev_title, prev_page = id, timestamp, title, page
+                if prev_revision_date is not None:
+                    lapse_between_last_version_and_cut = (filtered_date - prev_revision_date).total_seconds()
+                    if max_time_lapse_between_revisions > 0.0 and \
+                        ((max_time_lapse_between_revisions <= lapse_between_last_version_and_cut) or (lapse_between_last_version_and_cut / 86400) >= min_days_stable_page_version):
+                        secure_revision_page = prev_revision_page
+                assert prev_id and prev_title
+                if secure_revision_page:
+                    yield prev_id, prev_title, secure_revision_page
+                prev_revision_date, prev_revision_page = None, None
+                secure_revision_page = None
+                max_time_lapse_between_revisions = 0
+            prev_id = id
+            prev_title = title
 
-    if prev_id and prev_title and prev_page is not None:
-        if convert_timestamp_to_date(prev_timestamp) < timecut_date:
-            yield prev_id, prev_title, prev_page
+        revision_date = convert_timestamp_to_date(timestamp)
+        if (revision_date <= filtered_date or (prev_revision_date is not None and prev_revision_date <= filtered_date)) \
+            and ((prev_revision_date is None) or (revision_date > prev_revision_date)):
+            if prev_revision_date is None:
+                # IF it is the first one, puts it anyway, no other choice
+                prev_revision_date = revision_date
+                prev_revision_page = page
+                secure_revision_page = page
+            else:
+                curr_lapse_from_filter_date = (filtered_date - revision_date).days
+                if curr_lapse_from_filter_date > max_look_back_for_stable_page_version:
+                    if revision_date <= filtered_date:
+                        secure_revision_page = page
+                    else:
+                        assert prev_revision_date <= filtered_date
+                        secure_revision_page = prev_revision_page
+
+                    prev_revision_page = page
+                    prev_revision_date = revision_date
+                else:
+                    # here control well in order to not assign malicious content
+                    curr_lapse = (revision_date - prev_revision_date).total_seconds()
+                    assert curr_lapse >= 0
+                    assert prev_revision_date <= filtered_date
+                    if curr_lapse > max_time_lapse_between_revisions or \
+                        (curr_lapse / 86400) >= min_days_stable_page_version:
+                        secure_revision_page = prev_revision_page
+                        max_time_lapse_between_revisions = max(curr_lapse, max_time_lapse_between_revisions)
+
+                    prev_revision_date = revision_date
+                    prev_revision_page = page
+
+    if prev_revision_date is not None:
+        lapse_between_last_version_and_cut = (filtered_date - prev_revision_date).total_seconds()
+        if max_time_lapse_between_revisions > 0.0 and \
+            ((max_time_lapse_between_revisions <= lapse_between_last_version_and_cut) or (lapse_between_last_version_and_cut / 86400) >= min_days_stable_page_version):
+            secure_revision_page = prev_revision_page
+        assert prev_id and prev_title
+        if secure_revision_page:
+            yield prev_id, prev_title, secure_revision_page
 
 
-def convert_xml(input_file: str, output_file: str, time_cut: str, min_days_stable_page_version: int) -> None:
+def convert_xml(input_file: str, output_file: str, time_cut: str, min_days_stable_page_version: int, max_look_back_for_stable_page_version: int) -> None:
     header, footer, templateNamespace = get_header_footer(input_file)
     output = open(output_file, 'w')
     output.write(header)
 
-    for i, (id, title, page) in enumerate(split_history(input_file, templateNamespace, time_cut, min_days_stable_page_version)):
+    for i, (id, title, page) in enumerate(split_history(input_file, templateNamespace, time_cut, min_days_stable_page_version, max_look_back_for_stable_page_version)):
         output.write('  <page>\n')
         output.write(f'    <title>{title}</title>\n')
         output.write('    <ns>0</ns>\n')
@@ -178,10 +223,11 @@ def main() -> None:
     parser.add_argument("--input_file", "-i", type=str, help="The input xml file to split.")
     parser.add_argument("--output_file", "-o", type=str, help="The output xml file to split following to the timecut.")
     parser.add_argument("--time_cut", "-t", type=str, default='2025-01-01T00:00:00Z', help="Cutoff date for processing pages.")
-    parser.add_argument("--min_days_stable_page_version", "-m", type=int, default=30, help="Minimum days for a stable page version.")
+    parser.add_argument("--min_days_stable_page_version", "-m", type=int, default=10, help="Minimum days for a stable page version.")
+    parser.add_argument("--max_look_back_for_stable_page_version", "-l", type=int, default=30, help="Maximum look back days for a stable page version.")
     args = parser.parse_args()
 
-    convert_xml(args.input_file, args.output_file, args.time_cut, args.min_days_stable_page_version)
+    convert_xml(args.input_file, args.output_file, args.time_cut, args.min_days_stable_page_version, args.max_look_back_for_stable_page_version)
 
 
 if __name__ == "__main__":
