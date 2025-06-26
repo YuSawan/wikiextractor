@@ -159,7 +159,7 @@ class OutputSplitter():
             self.close()
             self.file = self.open(self.nextFile.next())
 
-    def write(self, data: bytes) -> None:
+    def write(self, data: str) -> None:
         self.reserve(len(data))
         if self.compress:
             self.file.write(data)
