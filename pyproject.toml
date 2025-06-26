@@ -13,7 +13,7 @@ dependencies = [
 wikiextractor = "wikiextractor.WikiExtractor:main"
 extractPage = "wikiextractor.extractPage:main"
 splitRevision = "wikiextractor.splitRevision:main"
-convertDictionary = "wikiextractor.convertDictionary:main"
+convertPage = "wikiextractor.convertPage:main"
 pageHistory = "wikiextractor.pageHistory:main"
 createDataset = "wikiextractor.createDataset:main"
 

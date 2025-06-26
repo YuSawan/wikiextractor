@@ -2,7 +2,6 @@ import argparse
 import html
 import json
 import logging
-import os
 import unicodedata
 from itertools import accumulate
 from string import punctuation
@@ -156,12 +155,10 @@ def main() -> None:
     parser.add_argument("--output_file", "-o", type=str, default='output', help="The output xml file to split following to the timecut.")
     args = parser.parse_args()
 
-    os.makedirs(args.output_dir, exist_ok=True)
-    dictionary_output = open(args.output_file, 'w')
-    for id, title, timestamp, examples in convert_for_entity_linking(args.input_file):
-        if examples:
-            dictionary_output.write(json.dumps({"id": id, "timestamp": timestamp, "title": title, "text": examples}, ensure_ascii=False) + '\n')
-    dictionary_output.close()
+    with open(args.output_file, 'w') as f:
+        for id, title, timestamp, examples in convert_for_entity_linking(args.input_file):
+            if examples:
+                f.write(json.dumps({"id": id, "timestamp": timestamp, "title": title, "text": examples}, ensure_ascii=False) + '\n')
 
 if __name__ == "__main__":
     main()
