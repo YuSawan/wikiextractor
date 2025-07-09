@@ -587,7 +587,7 @@ def main() -> None:
                         help="produce HTML output, subsumes --links")
     groupP.add_argument("-l", "--links", action="store_true",
                         help="preserve links")
-    groupP.add_argument("-ns", "--namespaces", default="", metavar="ns1,ns2",
+    groupP.add_argument("-ns", "--namespaces", default=None, metavar="FILE",
                         help="accepted namespaces")
     groupP.add_argument("--templates",
                         help="use or create file containing templates")
@@ -629,7 +629,8 @@ def main() -> None:
         return
 
     if args.namespaces:
-        acceptedNamespaces = list(set(args.namespaces.split(',')))
+        import json
+        acceptedNamespaces = list(set(json.load(open(args.namespaces))))
         Extractor.acceptedNamespaces += acceptedNamespaces
 
     FORMAT = '%(levelname)s: %(message)s'
