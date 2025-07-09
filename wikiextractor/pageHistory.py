@@ -134,6 +134,8 @@ def get_titlechange_history(input_file: str, output_file: str) -> None:
                         new_page_title = None
             if old_page_title and new_page_title:
                 if not r:
+                    if history and history[-1]['old_page_title'] == old_page_title and history[-1]['new_page_title'] == new_page_title :
+                        history = history[:-1]
                     history.append({"timestamp": t, "old_page_title": html.unescape(old_page_title), "new_page_title": html.unescape(new_page_title), "redirect": r})
         output.write(json.dumps({"id": id, "title": html.unescape(title), "history": history}, ensure_ascii=False) + '\n')
         if i % 1000 == 0:
